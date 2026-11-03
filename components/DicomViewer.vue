@@ -7,70 +7,26 @@
           <span class="value">{{ value }}</span>
         </div>
       </div>
-      <div v-if="error" class="error-message">
+      <div v-if="error" class="error-message" role="alert">
         {{ error }}
       </div>
       <div v-if="!metadata && !error" class="loading">
-        Loading DICOM data...
+        Reading DICOM data...
       </div>
     </div>
   </template>
   <script setup lang="ts">
-  import { ref } from 'vue'
-  import dicomParser from 'dicom-parser'
-  interface DicomMetadata {
-    patientName: string
-    patientId: string
-    studyDate: string
-    modality: string
-    studyDescription: string
-    seriesDescription: string
-    manufacturer: string
-    pixelSpacing: string
-    windowCenter: string
-    windowWidth: string
-    [key: string]: string
-  }
+  import type { DicomMetadata } from '~/types/imageTypes'
   defineProps<{
     isDarkMode: boolean
+    metadata: DicomMetadata | null
+    error: string | null
   }>()
-  const metadata = ref<DicomMetadata | null>(null)
-  const error = ref<string | null>(null)
-  const formatDate = (dateString: string): string => {
-    return `${dateString.slice(0, 4)}-${dateString.slice(4, 6)}-${dateString.slice(6, 8)}`
-  }
-  const formatLabel = (key: string): string => {
-    return key
+  const formatLabel = (key: string | number): string => {
+    return String(key)
       .replace(/([A-Z])/g, ' $1')
       .replace(/^./, str => str.toUpperCase())
   }
-  const loadDicomFile = async (file: File) => {
-    const reader = new FileReader() 
-    try {
-      const arrayBuffer = await file.arrayBuffer()
-      const dicomData = dicomParser.parseDicom(new Uint8Array(arrayBuffer))
-      metadata.value = {
-        patientName: dicomData.string('x00100010') || 'N/A',
-        patientId: dicomData.string('x00100020') || 'N/A',
-        studyDate: formatDate(dicomData.string('x00080020') || ''),
-        modality: dicomData.string('x00080060') || 'N/A',
-        studyDescription: dicomData.string('x00081030') || 'N/A',
-        seriesDescription: dicomData.string('x0008103E') || 'N/A',
-        manufacturer: dicomData.string('x00080070') || 'N/A',
-        pixelSpacing: dicomData.string('x00280030') || 'N/A',
-        windowCenter: dicomData.string('x00281050') || 'N/A',
-        windowWidth: dicomData.string('x00281051') || 'N/A'
-      }
-      error.value = null
-    } catch (e) {
-      error.value = `Error parsing DICOM file: ${e instanceof Error ? e.message : 'Unknown error'}`
-      metadata.value = null
-      console.error('Error parsing DICOM file:', e)
-    }
-  }
-  defineExpose({
-    loadDicomFile
-  })
   </script>
   <style scoped>
   .dicom-viewer {

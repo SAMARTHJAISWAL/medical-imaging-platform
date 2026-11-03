@@ -1,44 +1,39 @@
-import { ref } from 'vue'
-import Konva from 'konva'
-import type { Ref } from 'vue'
+import { windowToRgba } from '~/utils/dicom'
 
-interface WindowLevelReturn {
-  windowWidth: Ref<number>
-  windowCenter: Ref<number>
-  applyWindowLevel: (konvaImage: Konva.Image) => void
-}
-export const useWindowLevel = (): WindowLevelReturn => {
-  const windowWidth = ref<number>(2048)
-  const windowCenter = ref<number>(1024)
-  const applyWindowLevel = (konvaImage: Konva.Image) => {
-    const imageObj = konvaImage.image() as HTMLImageElement
-    if (!imageObj) return
+/**
+ * Window/level for ordinary 8-bit raster images (PNG/JPEG): converts the source image to
+ * grayscale luminance and applies a linear window. DICOM images are windowed on their raw
+ * modality values instead (see useDicomParser.renderImage).
+ */
+export const useWindowLevel = () => {
+  const applyWindowLevel = (
+    source: HTMLImageElement,
+    center: number,
+    width: number
+  ): Promise<HTMLImageElement | null> => {
     const canvas = document.createElement('canvas')
+    canvas.width = source.naturalWidth || source.width
+    canvas.height = source.naturalHeight || source.height
     const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    canvas.width = imageObj.width
-    canvas.height = imageObj.height
-    ctx.drawImage(imageObj, 0, 0)
+    if (!ctx) return Promise.resolve(null)
+    ctx.drawImage(source, 0, 0)
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    const pixels = imageData.data
-    const min = windowCenter.value - windowWidth.value / 2
-    const max = windowCenter.value + windowWidth.value / 2
-    for (let i = 0; i < pixels.length; i += 4) {
-      const value = pixels[i]
-      const normalized = ((value - min) / (max - min)) * 255
-      pixels[i] = pixels[i + 1] = pixels[i + 2] = normalized
+    const px = imageData.data
+    const luminance = new Float32Array(px.length / 4)
+    for (let i = 0; i < luminance.length; i++) {
+      luminance[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2]
     }
+    const rgba = windowToRgba(luminance, center, width)
+    // keep the source alpha channel
+    for (let i = 3; i < rgba.length; i += 4) rgba[i] = px[i]
+    imageData.data.set(rgba)
     ctx.putImageData(imageData, 0, 0)
-    const newImage = new Image()
-    newImage.src = canvas.toDataURL()
-    newImage.onload = () => {
-      konvaImage.image(newImage)
-      konvaImage.getLayer()?.batchDraw()
-    }
+    return new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => resolve(img)
+      img.onerror = () => resolve(null)
+      img.src = canvas.toDataURL()
+    })
   }
-  return {
-    windowWidth,
-    windowCenter,
-    applyWindowLevel
-  }
+  return { applyWindowLevel }
 }
