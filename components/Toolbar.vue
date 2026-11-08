@@ -39,11 +39,11 @@
         <n-button @click="$emit('reset')" type="warning">
           Reset
         </n-button>
-        <n-button 
-          @click="$emit('crop')" 
+        <n-button
+          @click="$emit('crop')"
           :type="isCropping ? 'success' : 'default'"
         >
-          Crop
+          {{ isCropping ? 'Apply Crop' : 'Crop' }}
         </n-button>
       </div>
       <n-collapse>
@@ -70,21 +70,21 @@
               />
             </div>  
             <div class="mb-2">
-              <label class="block text-sm font-medium mb-1">Window Width</label>
+              <label class="block text-sm font-medium mb-1">Window Width: {{ Math.round(windowWidth) }}</label>
               <n-slider
-                v-model:value="windowWidth"
+                :value="windowWidth"
                 :min="1"
-                :max="4095"
+                :max="windowRange.max - windowRange.min + 1"
                 :step="1"
                 @update:value="$emit('window-width-change', $event)"
               />
-            </div>  
+            </div>
             <div class="mb-2">
-              <label class="block text-sm font-medium mb-1">Window Center</label>
+              <label class="block text-sm font-medium mb-1">Window Center: {{ Math.round(windowCenter) }}</label>
               <n-slider
-                v-model:value="windowCenter"
-                :min="1"
-                :max="4095"
+                :value="windowCenter"
+                :min="windowRange.min"
+                :max="windowRange.max"
                 :step="1"
                 @update:value="$emit('window-center-change', $event)"
               />
@@ -109,10 +109,10 @@
           <div class="mb-2">
             <label class="block text-sm font-medium mb-1">Pixel Spacing (mm)</label>
             <n-input-number
-              v-model:value="pixelSpacing"
+              :value="pixelSpacing"
               :min="0.001"
               :step="0.001"
-              @update:value="$emit('pixel-spacing-change', $event)"
+              @update:value="(v: number | null) => v && $emit('pixel-spacing-change', v)"
             />
           </div>
         </n-collapse-item>
@@ -124,41 +124,56 @@
   </template>
   <script setup lang="ts">
   import { ref } from 'vue'
-  import { 
-    NButton, 
+  import {
+    NButton,
     NButtonGroup,
-    NSlider, 
-    NCollapse, 
-    NCollapseItem, 
-    NSelect, 
-    NInputNumber 
+    NSlider,
+    NCollapse,
+    NCollapseItem,
+    NSelect,
+    NInputNumber
   } from 'naive-ui'
-  const props = defineProps<{
+  import type { GeometricShape } from '~/composables/useGeometricMeasurements'
+  import type { MeasurementUnit } from '~/utils/measurements'
+  withDefaults(defineProps<{
     isDarkMode: boolean
     isCropping?: boolean
-    isMeasuring?: boolean
-  }>()
-  const activeTool = ref<string | null>(null)
+    windowWidth?: number
+    windowCenter?: number
+    windowRange?: { min: number, max: number }
+    pixelSpacing?: number
+  }>(), {
+    pixelSpacing: 1,
+    isCropping: false,
+    windowWidth: 256,
+    windowCenter: 128,
+    windowRange: () => ({ min: 0, max: 255 })
+  })
+  const activeTool = ref<GeometricShape | null>(null)
   const brightnessValue = ref(0)
   const contrastValue = ref(0)
-  const windowWidth = ref(2048)
-  const windowCenter = ref(1024)
-  const measurementUnit = ref('px')
-  const pixelSpacing = ref(1)
-  const setMeasurementTool = (tool: string) => {
+  const measurementUnit = ref<MeasurementUnit>('px')
+  const setMeasurementTool = (tool: GeometricShape) => {
     activeTool.value = activeTool.value === tool ? null : tool
-    emit('measure', tool)
+    emit('measure', activeTool.value)
   }
+  /** Called by the parent after Reset so the controls match the canvas again. */
+  const resetControls = () => {
+    activeTool.value = null
+    brightnessValue.value = 0
+    contrastValue.value = 0
+  }
+  defineExpose({ resetControls })
   const emit = defineEmits<{
     (e: 'zoom', direction: 'in' | 'out'): void
     (e: 'reset'): void
-    (e: 'measure', tool: string): void
+    (e: 'measure', tool: GeometricShape | null): void
     (e: 'crop'): void
     (e: 'brightness-change', value: number): void
     (e: 'contrast-change', value: number): void
     (e: 'window-width-change', value: number): void
     (e: 'window-center-change', value: number): void
-    (e: 'unit-change', value: string): void
+    (e: 'unit-change', value: MeasurementUnit): void
     (e: 'pixel-spacing-change', value: number): void
     (e: 'toggle-theme'): void
   }>()

@@ -12,167 +12,152 @@
   import Konva from 'konva'
   import { useImageProcessing } from '~/composables/useImageProcessing'
   import { useCrop } from '~/composables/useCrop'
+  import { useGeometricMeasurements, type GeometricShape } from '~/composables/useGeometricMeasurements'
+  import type { MeasurementUnit } from '~/utils/measurements'
   defineProps<{
     isDarkMode: boolean
   }>()
+  const MAX_WIDTH = 800
+  const MAX_HEIGHT = 600
   const canvasContainer = ref<HTMLDivElement | null>(null)
   const image = ref<HTMLImageElement | null>(null)
   const imageSize = ref({ width: 0, height: 0 })
   let stage: Konva.Stage | null = null
   let layer: Konva.Layer | null = null
   let konvaImage: Konva.Image | null = null
+  // canvas units per source-image pixel (fit-to-view scale)
+  let fitScale = 1
   const scale = ref(1)
-  const { adjustBrightness, adjustContrast } = useImageProcessing()
-  const { initCrop, applyCrop } = useCrop()
-  const measureInRealUnits = (pixels: number, unit: string, pixelSpacing: number) => {
-    if (unit === 'px') return `${Math.round(pixels)} px`
-    if (unit === 'mm') return `${(pixels * pixelSpacing).toFixed(1)} mm`
-    if (unit === 'cm') return `${(pixels * pixelSpacing / 10).toFixed(2)} cm`
-    return `${Math.round(pixels)} px`
-  }
+  const { brightness, contrast, applyFilters, adjustBrightness, adjustContrast } = useImageProcessing()
+  const { initCrop, applyCrop: cropImage, cancelCrop } = useCrop()
+  const { attach, detach } = useGeometricMeasurements()
+
   const initCanvas = (imageElement: HTMLImageElement) => {
     if (!canvasContainer.value) return
-    if (stage) {
-      stage.destroy()
-    }
-    const containerWidth = Math.min(imageElement.width, 800)
-    const containerHeight = Math.min(imageElement.height, 600)
+    stage?.destroy()
+    const w = imageElement.naturalWidth || imageElement.width
+    const h = imageElement.naturalHeight || imageElement.height
+    // Uniform scale so the aspect ratio is preserved.
+    fitScale = Math.min(MAX_WIDTH / w, MAX_HEIGHT / h, 1)
     stage = new Konva.Stage({
       container: canvasContainer.value,
-      width: containerWidth,
-      height: containerHeight,
+      width: Math.round(w * fitScale),
+      height: Math.round(h * fitScale)
     })
     layer = new Konva.Layer()
     stage.add(layer)
     konvaImage = new Konva.Image({
       image: imageElement,
-      width: containerWidth,
-      height: containerHeight,
-      draggable: true,
+      width: w,
+      height: h,
+      scaleX: fitScale,
+      scaleY: fitScale,
+      draggable: true
     })
     layer.add(konvaImage)
     layer.draw()
+    scale.value = 1
   }
+
+  /** Show a new image, resetting zoom, annotations and tools. */
   const setImage = (newImage: HTMLImageElement) => {
     image.value = newImage
     imageSize.value = {
-      width: newImage.width,
-      height: newImage.height
+      width: newImage.naturalWidth || newImage.width,
+      height: newImage.naturalHeight || newImage.height
     }
     initCanvas(newImage)
   }
+
+  /** Swap the displayed pixels (e.g. after window/level) while keeping view and annotations. */
+  const replacePixels = (newImage: HTMLImageElement) => {
+    if (!konvaImage) return
+    konvaImage.image(newImage)
+    if (brightness.value !== 0 || contrast.value !== 0) applyFilters(konvaImage)
+    else konvaImage.getLayer()?.batchDraw()
+  }
+
+  /** Zoom in/out around the centre of the view. */
   const zoom = (direction: 'in' | 'out') => {
     if (!stage) return
     const scaleBy = 1.2
     const oldScale = scale.value
-    const pointer = stage.getPointerPosition()
-    if (!pointer) return
-    const mousePointTo = {
-      x: (pointer.x - stage.x()) / oldScale,
-      y: (pointer.y - stage.y()) / oldScale,
+    const center = { x: stage.width() / 2, y: stage.height() / 2 }
+    const pointTo = {
+      x: (center.x - stage.x()) / oldScale,
+      y: (center.y - stage.y()) / oldScale
     }
     const newScale = direction === 'in' ? oldScale * scaleBy : oldScale / scaleBy
-    scale.value = newScale 
+    scale.value = newScale
     stage.scale({ x: newScale, y: newScale })
-    const newPos = {
-      x: pointer.x - mousePointTo.x * newScale,
-      y: pointer.y - mousePointTo.y * newScale,
-    }
-    stage.position(newPos)
+    stage.position({ x: center.x - pointTo.x * newScale, y: center.y - pointTo.y * newScale })
     stage.batchDraw()
   }
+
+  /** Reset zoom/pan, remove annotations and clear brightness/contrast. */
   const reset = () => {
-    if (!stage || !image.value) return 
+    if (!stage || !layer || !konvaImage) return
+    detach(stage)
+    cancelCrop(stage)
     scale.value = 1
     stage.scale({ x: 1, y: 1 })
     stage.position({ x: 0, y: 0 })
+    konvaImage.position({ x: 0, y: 0 })
+    konvaImage.draggable(true)
+    layer.getChildren((node) => node !== konvaImage).forEach((node) => node.destroy())
+    adjustBrightness(0, konvaImage)
+    adjustContrast(0, konvaImage)
     stage.batchDraw()
-    if (konvaImage) {
-      adjustBrightness(0, konvaImage)
-      adjustContrast(0, konvaImage)
+  }
+
+  /** Activate a measurement tool, or pass null to return to pan mode. */
+  const setTool = (tool: GeometricShape | null, unit: MeasurementUnit = 'px', pixelSpacing = 1) => {
+    if (!stage || !layer || !konvaImage) return
+    cancelCrop(stage)
+    if (!tool) {
+      detach(stage)
+      konvaImage.draggable(true)
+      return
     }
+    konvaImage.draggable(false)
+    attach(stage, layer, tool, { unit, pixelSpacing, imageScale: fitScale })
   }
-  const measure = (unit = 'px', pixelSpacing = 1) => {
-    if (!stage || !layer) return
-    stage.off('mousedown mousemove mouseup touchstart touchmove touchend')
-    let isDrawing = false
-    let currentLine: Konva.Line | null = null
-    let currentText: Konva.Text | null = null
-    stage.on('mousedown touchstart', () => {
-      isDrawing = true
-      const pos = stage.getPointerPosition()
-      if (!pos) return
-      currentLine = new Konva.Line({
-        points: [pos.x, pos.y, pos.x, pos.y],
-        stroke: '#00ff00',
-        strokeWidth: 2
-      })
-      currentText = new Konva.Text({
-        x: pos.x,
-        y: pos.y - 20,
-        text: '0 ' + unit,
-        fontSize: 14,
-        fill: '#00ff00'
-      })
-      layer.add(currentLine)
-      layer.add(currentText)
-      layer.batchDraw()
-    })
-    stage.on('mousemove touchmove', () => {
-      if (!isDrawing || !currentLine || !currentText) return
-      const pos = stage.getPointerPosition()
-      if (!pos) return
-      const points = currentLine.points()
-      currentLine.points([points[0], points[1], pos.x, pos.y])
-      const dx = pos.x - points[0]
-      const dy = pos.y - points[1]
-      const distance = Math.sqrt(dx * dx + dy * dy) / scale.value
-      currentText.text(measureInRealUnits(distance, unit, pixelSpacing))
-      currentText.position({
-        x: (points[0] + pos.x) / 2,
-        y: (points[1] + pos.y) / 2 - 20
-      })
-      layer.batchDraw()
-    })
-    stage.on('mouseup touchend', () => {
-      isDrawing = false
-      currentLine = null
-      currentText = null
-    })
+
+  const startCrop = () => {
+    if (!stage || !layer || !konvaImage) return
+    detach(stage)
+    konvaImage.draggable(false)
+    initCrop(stage, layer)
   }
-  const handleCrop = () => {
-    if (!stage || !layer) return 
-    const cropBox = initCrop(stage, layer)
-    if (konvaImage && cropBox) {
-      const newImage = applyCrop(konvaImage)
-      if (newImage) {
-        setImage(newImage)
-      }
-    }
+
+  /** Crop to the drawn box. Returns the cropped image (full resolution) or null. */
+  const finishCrop = async (): Promise<HTMLImageElement | null> => {
+    if (!stage || !konvaImage) return null
+    const cropped = await cropImage(stage, konvaImage)
+    konvaImage.draggable(true)
+    if (cropped) setImage(cropped)
+    return cropped
   }
+
   const updateBrightness = (value: number) => {
-    if (!konvaImage) return
-    adjustBrightness(value, konvaImage)
+    if (konvaImage) adjustBrightness(value, konvaImage)
   }
   const updateContrast = (value: number) => {
-    if (!konvaImage) return
-    adjustContrast(value, konvaImage)
+    if (konvaImage) adjustContrast(value, konvaImage)
   }
   onUnmounted(() => {
-    if (stage) {
-      stage.off('mousedown mousemove mouseup touchstart touchmove touchend')
-      stage.destroy()
-    }
+    stage?.destroy()
   })
   defineExpose({
     setImage,
+    replacePixels,
     zoom,
     reset,
-    measure,
+    setTool,
+    startCrop,
+    finishCrop,
     updateBrightness,
-    updateContrast,
-    handleCrop,
-    konvaImage
+    updateContrast
   })
   </script>
   <style scoped>
