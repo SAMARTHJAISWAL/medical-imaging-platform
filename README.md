@@ -136,3 +136,7 @@ CI (`.github/workflows/ci.yml`) runs typecheck, tests and build on pushes and pu
 - Measurements and annotations are not saved or exported.
 - Window/level after cropping a DICOM image works on the displayed 8-bit pixels rather than the
   raw values.
+
+## Licence
+
+[MIT](LICENSE) © 2024–2026 Samarth Jaiswal
